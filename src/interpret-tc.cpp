@@ -246,7 +246,7 @@ struct tc_online_state {
         uint32_t cap; ///< This recording's dynamic length cap, latched at begin
         bool call_target;
         bool continuation;
-        bool pass_through; ///< Starved-head retry: record through installed heads while short
+        bool pass_through;      ///< Starved-head retry: record through installed heads while short
         uint64_t ctx_slot_base; ///< Translation context of the recording, latched at begin
         tc_online_entry entries[max_len];
     };
@@ -580,15 +580,17 @@ register tc_context<state_access> *tcc asm("r15");
 #define TC_FETCH_TAG_INVALIDATE() (tcc->fetch_vaddr_page = ensure_fetch_cache_miss(pc))
 #define TC_FETCH_TAG_SYNC() ((void) 0)
 #else
-// The fetch cache's two hot fields travel as handler arguments: the pre-load
-// consumes them at the head of its dependency chain, where keeping them in
-// registers is worth several percent. The tc_context copies are kept coherent
-// at every outlined-helper call and chain exit, and remain the storage the
-// outer loop and the helpers use.
+// The fetch cache's hot page tag travels as a handler argument: the pre-load
+// consumes it at the head of its dependency chain, where keeping it in a
+// register is worth several percent. With pc as a fast address the fetch
+// offset is dissolved into pc itself, so the signature is five slots:
+// accessor, insn, pc, countdown, fetch tag. The tc_context copies are kept
+// coherent at every outlined-helper call and chain exit, and remain the
+// storage the outer loop and the helpers use.
 #define TC_HOT_PARAMS                                                                                                  \
-    , uint64_t pc, uint64_t tc_remaining, uint64_t fetch_vaddr_page,                                                   \
-        i_state_access_fast_addr_t<STATE_ACCESS> fetch_vf_offset
-#define TC_HOT_ARGS , pc, tc_remaining, fetch_vaddr_page, fetch_vf_offset
+    , i_state_access_fast_addr_t<STATE_ACCESS> pc, uint64_t tc_remaining,                                              \
+        i_state_access_fast_addr_t<STATE_ACCESS> fetch_vaddr_page
+#define TC_HOT_ARGS , pc, tc_remaining, fetch_vaddr_page
 #define TC_ENTER() auto *const tcc = tc_ctx(a)
 #define TC_SYNC() ((void) 0)
 #define TC_FETCH_TAG fetch_vaddr_page
@@ -1248,13 +1250,13 @@ static void tc_online_report(const tc_online_state &o) {
         static_cast<unsigned long long>(o.installed), static_cast<unsigned long long>(o.aborted),
         static_cast<unsigned long long>(o.short_aborted), static_cast<unsigned long long>(o.compile_aborted),
         static_cast<unsigned long long>(o.verify_aborted), static_cast<unsigned long long>(o.invalidated),
-        static_cast<unsigned long long>(o.demotions), static_cast<unsigned long long>(o.escalations), static_cast<unsigned long long>(o.continuations),
-        static_cast<unsigned long long>(o.flushes), static_cast<unsigned long long>(o.links),
-        static_cast<unsigned long long>(o.register_links), static_cast<unsigned long long>(o.register_moves),
-        static_cast<unsigned long long>(o.register_loads), static_cast<unsigned long long>(o.register_stores),
-        static_cast<unsigned long long>(longest_chain), static_cast<unsigned long long>(longest_fp_chain),
-        static_cast<unsigned long long>(longest_fp_entries), static_cast<unsigned long long>(longest_graph_chain),
-        static_cast<unsigned long long>(longest_fp_graph_chain),
+        static_cast<unsigned long long>(o.demotions), static_cast<unsigned long long>(o.escalations),
+        static_cast<unsigned long long>(o.continuations), static_cast<unsigned long long>(o.flushes),
+        static_cast<unsigned long long>(o.links), static_cast<unsigned long long>(o.register_links),
+        static_cast<unsigned long long>(o.register_moves), static_cast<unsigned long long>(o.register_loads),
+        static_cast<unsigned long long>(o.register_stores), static_cast<unsigned long long>(longest_chain),
+        static_cast<unsigned long long>(longest_fp_chain), static_cast<unsigned long long>(longest_fp_entries),
+        static_cast<unsigned long long>(longest_graph_chain), static_cast<unsigned long long>(longest_fp_graph_chain),
         static_cast<unsigned long long>(longest_fp_graph_entries), static_cast<unsigned long long>(continuation_traces),
         static_cast<unsigned long long>(continuation_entries), static_cast<unsigned long long>(continuation_fp_entries),
         static_cast<unsigned long long>(connected_continuation_traces),
@@ -1264,11 +1266,11 @@ static void tc_online_report(const tc_online_state &o) {
         static_cast<unsigned long long>(longest_connected_fp_recording), static_cast<unsigned>(o.ntraces));
 #if TC_LIGHTNING
     if (std::getenv("TC_ONLINE_EXEC_STATS") != nullptr) {
-        std::fprintf(stderr, "tc-online: episodes %llu trace-insns %llu compile-ms %llu trace-ms %llu ctx-entry-bails %llu\n",
+        std::fprintf(stderr,
+            "tc-online: episodes %llu trace-insns %llu compile-ms %llu trace-ms %llu ctx-entry-bails %llu\n",
             static_cast<unsigned long long>(o.episodes), static_cast<unsigned long long>(o.trace_insns),
             static_cast<unsigned long long>(o.compile_ns / 1000000),
-            static_cast<unsigned long long>(o.trace_ns / 1000000),
-            static_cast<unsigned long long>(tc_ctx_entry_bails));
+            static_cast<unsigned long long>(o.trace_ns / 1000000), static_cast<unsigned long long>(tc_ctx_entry_bails));
         std::fprintf(stderr, "tc-online: fp-guard-bails");
         for (uint8_t i = 0; i < tc_fp_guard_count; ++i) {
             std::fprintf(stderr, " %s %llu", tc_fp_guard_names[i],
@@ -1958,8 +1960,7 @@ static void tc_online_record(tc_context<STATE_ACCESS> *c, uint64_t pc, uint32_t 
 #ifdef TLB_FILL_LOG
         if (getenv("TC_REC_LOG") != nullptr) {
             std::fprintf(stderr, "REC-END ctx head=%llx len=%u at=%llx\n",
-                static_cast<unsigned long long>(recording.head), recording.len,
-                static_cast<unsigned long long>(pc));
+                static_cast<unsigned long long>(recording.head), recording.len, static_cast<unsigned long long>(pc));
         }
 #endif
         if (recording.len > 0) {
@@ -2890,8 +2891,7 @@ struct tc_lightning_execution {
             n, dest, depth, [&](auto d, auto l, auto r) { jit_xorr(d, l, r); },
             [&](auto d, auto l, auto r) { jit_xori(d, l, r); });
     }
-    static void emit_shift_left(tc_lightning_execution &e, const tc_lightning_node &n, jit_gpr_t dest,
-        unsigned depth) {
+    static void emit_shift_left(tc_lightning_execution &e, const tc_lightning_node &n, jit_gpr_t dest, unsigned depth) {
         jit_state_t *_jit = e.jit;
         e.emit_binary(
             n, dest, depth, [&](auto d, auto l, auto r) { jit_lshr(d, l, r); },
@@ -3366,6 +3366,11 @@ struct tc_lightning_execution {
     /// \brief Reads fcsr as an integer value for read-only FP CSR instructions.
     tc_lightning_value read_fcsr_word() {
         return {this, add_node(emit_shadow_load, 0, 0, shadow_fcsr_offset), false, 64};
+    }
+
+    /// \brief Stores an integer value into fcsr.
+    void write_fcsr_word(tc_lightning_value value) {
+        write_shadow(shadow_fcsr_offset, value);
     }
 
     /// \brief Stores a value into an f register in the shadow.
@@ -4562,10 +4567,13 @@ static FORCE_INLINE const void *tc_hook_site(tc_context<STATE_ACCESS> *c, uint64
     bool installed = false;
 #if TC_ONLINE
     if (const auto *const trace = tc_online_find(c->online, vpc); trace != nullptr &&
-        trace->code_vf_offset == static_cast<uint64_t>(c->fetch_vaddr_page) - tlb_addr_page(vpc)) [[unlikely]] {
+        (CALL_ENTRY || trace->code_vf_offset == static_cast<uint64_t>(c->fetch_vaddr_page) - tlb_addr_page(vpc)))
+        [[unlikely]] {
         installed = true;
 #if TC_LIGHTNING
         if constexpr (CALL_ENTRY) {
+            // Cross-mapping dynamic entries use call_fn, which validates the
+            // target's recorded hot-TLB mapping before entering its body.
             fn = trace->call_fn;
         } else {
             fn = trace->fn;
@@ -5435,40 +5443,6 @@ TC_FP_ARITH_HELPER(FNMADD, execute_FNMADD(a, pc, insn))
 TC_FP_ARITH_HELPER(FNMSUB, execute_FNMSUB(a, pc, insn))
 #undef TC_FP_ARITH_HELPER
 
-/// \brief Whole-instruction helper for CSR ops on the fcsr family.
-/// \details Staged ONLY when the immediate csr field names fflags, frm or
-/// fcsr (the collector checks before staging), so the generic execute bodies
-/// below can never touch a CSR with flush or trap semantics inside a trace:
-/// these three just update fcsr (dirtying mstatus.FS, which changes no
-/// translation context and flushes nothing) and read the old value into rd.
-/// Pre-bails on FS off exactly like the arithmetic helpers, so the portable
-/// re-execution raises the illegal-instruction exception. The mcycle
-/// argument is consulted only by counter CSRs, never by this family; the
-/// possibly-lagging shadow value satisfies the signature.
-TC_FP_HELPER_ABI static execute_status tc_fp_helper_CSR_FP(processor_state *ps, uint32_t insn) {
-    const state_access a(*ps->penumbra.owner);
-    if ((a.read_mstatus() & MSTATUS_FS_MASK) == MSTATUS_FS_OFF) [[unlikely]] {
-        return execute_status::failure;
-    }
-    i_state_access_fast_addr_t<state_access> pc{};
-    switch ((insn >> 12) & 7) {
-        case 1:
-            return execute_CSRRW(a, pc, a.read_mcycle(), insn);
-        case 2:
-            return execute_CSRRS(a, pc, a.read_mcycle(), insn);
-        case 3:
-            return execute_CSRRC(a, pc, a.read_mcycle(), insn);
-        case 5:
-            return execute_CSRRWI(a, pc, a.read_mcycle(), insn);
-        case 6:
-            return execute_CSRRSI(a, pc, a.read_mcycle(), insn);
-        case 7:
-            return execute_CSRRCI(a, pc, a.read_mcycle(), insn);
-        default:
-            return execute_status::failure;
-    }
-}
-
 static bool tc_lightning_collect_fp(tc_lightning_execution &e, uint64_t &pc, uint32_t insn) {
     // A declined body may have requested the dynamic-frm guard before
     // declining; the request must not leak into the next staged instruction.
@@ -5559,14 +5533,42 @@ static bool tc_lightning_collect_fp(tc_lightning_execution &e, uint64_t &pc, uin
                     return true;
                 }
                 if (funct3 == 1 || funct3 == 2 || funct3 == 3 || funct3 == 5 || funct3 == 6 || funct3 == 7) {
-                    // Writes (and read-writes) of the fcsr family route to the
-                    // whole-instruction helper. This is what makes soft-float
-                    // libraries traceable: their fenv handling (csrs/csrc on
-                    // fflags around every operation in __multf3 and friends)
-                    // otherwise ends every recording and starves the seam at
-                    // the successor, because the uncollectable pc itself
-                    // becomes the next head.
-                    return stage_helper(tc_fp_helper_CSR_FP);
+                    e.emit_fs_guard();
+                    const auto fcsr = e.materialize(e.read_fcsr_word());
+                    auto old = fcsr;
+                    if (csr == 0x001) {
+                        old = fcsr & static_cast<uint64_t>(FCSR_FFLAGS_RW_MASK);
+                    } else if (csr == 0x002) {
+                        old = (fcsr & static_cast<uint64_t>(FCSR_FRM_RW_MASK)) >> static_cast<uint64_t>(FCSR_FRM_SHIFT);
+                    }
+
+                    const uint32_t rs1 = insn_get_rs1(insn);
+                    const bool immediate = (funct3 & 4) != 0;
+                    const auto operand = immediate ? imm_value(rs1) : e.read_x(rs1);
+                    const bool writes = funct3 == 1 || funct3 == 5 || rs1 != 0;
+                    if (writes) {
+                        auto value = operand;
+                        if (funct3 == 2 || funct3 == 6) {
+                            value = old | operand;
+                        } else if (funct3 == 3 || funct3 == 7) {
+                            value = old & (operand ^ UINT64_MAX);
+                        }
+                        if (csr == 0x001) {
+                            value = (fcsr & ~static_cast<uint64_t>(FCSR_FFLAGS_RW_MASK)) |
+                                ((value << static_cast<uint64_t>(FCSR_FFLAGS_SHIFT)) &
+                                    static_cast<uint64_t>(FCSR_FFLAGS_RW_MASK));
+                        } else if (csr == 0x002) {
+                            value = (fcsr & ~static_cast<uint64_t>(FCSR_FRM_RW_MASK)) |
+                                ((value << static_cast<uint64_t>(FCSR_FRM_SHIFT)) &
+                                    static_cast<uint64_t>(FCSR_FRM_RW_MASK));
+                        }
+                        e.write_fcsr_word(value);
+                    }
+                    if (const uint32_t rd = insn_get_rd(insn); rd != 0) {
+                        e.write_x(rd, old);
+                    }
+                    pc += 4;
+                    return true;
                 }
                 return false;
             }
@@ -5766,8 +5768,9 @@ static const void *tc_lightning_compile_trace(tc_online_state::trace &trace, jit
             {
                 static const bool log_abort = getenv("TC_ABORT_LOG") != nullptr;
                 if (log_abort) {
-                    std::fprintf(stderr, "ABORT head=%llx len=%u cut=%u insns:",
-                        static_cast<unsigned long long>(trace.head), trace.len, cut);
+                    std::fprintf(stderr,
+                        "ABORT head=%llx len=%u cut=%u insns:", static_cast<unsigned long long>(trace.head), trace.len,
+                        cut);
                     for (uint32_t i = 0; i < trace.len; ++i) {
                         std::fprintf(stderr, " %llx", static_cast<unsigned long long>(trace.entries[i].insn));
                     }
@@ -5813,8 +5816,7 @@ static const void *tc_lightning_compile_trace(tc_online_state::trace &trace, jit
         }
         const uint8_t nregs = tc_lightning_execution::usable_slots();
         for (uint8_t i = 0; i < norder; ++i) {
-            execution.guest_slot[order[i]] =
-                i < nregs ? static_cast<int8_t>(i) : tc_lightning_execution::memory_slot;
+            execution.guest_slot[order[i]] = i < nregs ? static_cast<int8_t>(i) : tc_lightning_execution::memory_slot;
         }
         execution.nguests = norder < nregs ? norder : nregs;
     }
@@ -5932,8 +5934,8 @@ static const void *tc_lightning_compile_trace(tc_online_state::trace &trace, jit
         {
             static const bool log_abort = getenv("TC_ABORT_LOG") != nullptr;
             if (log_abort) {
-                std::fprintf(stderr, "ABORT-collect head=%llx len=%u entries:",
-                    static_cast<unsigned long long>(trace.head), trace.len);
+                std::fprintf(stderr,
+                    "ABORT-collect head=%llx len=%u entries:", static_cast<unsigned long long>(trace.head), trace.len);
                 for (uint32_t i = 0; i < trace.len; ++i) {
                     std::fprintf(stderr, " %u:%llx>%llx", i, static_cast<unsigned long long>(trace.entries[i].vaddr),
                         static_cast<unsigned long long>(trace.entries[i].next_pc));
@@ -5965,8 +5967,9 @@ static const void *tc_lightning_compile_trace(tc_online_state::trace &trace, jit
         {
             static const bool log_abort = getenv("TC_ABORT_LOG") != nullptr;
             if (log_abort) {
-                std::fprintf(stderr, "ABORT-collect-loop head=%llx len=%u insns:",
-                    static_cast<unsigned long long>(trace.head), trace.len);
+                std::fprintf(stderr,
+                    "ABORT-collect-loop head=%llx len=%u insns:", static_cast<unsigned long long>(trace.head),
+                    trace.len);
                 for (uint32_t i = 0; i < trace.len; ++i) {
                     std::fprintf(stderr, " %llx", static_cast<unsigned long long>(trace.entries[i].insn));
                 }

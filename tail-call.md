@@ -2923,6 +2923,15 @@ shell cost +66% with tracing idle).
     the jit beats both interpreters comfortably -- holds at half
     the margin.
 
+    The build rot that forced the page-segment middle column is
+    since repaired: the six-slot shape's TC_HOT_PARAMS branch has
+    been migrated to the typed fast pc, dissolving the fetch offset
+    argument into pc and settling the signature at five slots. Every
+    shape compiles again under Clang and GCC on both architectures;
+    the five-slot runtime still owes its gate run on x86-64
+    hardware, where the amd64 column of this table is the anchor to
+    beat.
+
 18. DONE, GATED: THE REGISTER-PRESSURE LADDER -- r13, RANKED SLOT
     ASSIGNMENT, AND rcx/rdx ALL SHIPPED. The
     static-mapping falsification asked where more registers could
@@ -3319,6 +3328,9 @@ shell cost +66% with tracing idle).
     TLB cannot move or grow past it, so per-context slots halve to
     128 and the shadow grows 0x4000 -> 0xC000 within the freed
     shadow-state budget (AR_SHADOW_STATE_LENGTH 0x8000 -> 0x10000).
+    This paragraph records the initial 128-slot geometry measured below;
+    the final 256-slot geometry and its AArch64 remeasurement are recorded
+    in the amendment at the end of this item.
     The hash and state format change by design; the old canon is
     dead. The stateful machine caches ctx*128 in the penumbra,
     maintained as a side effect of write_iprv/write_mstatus and
@@ -3393,7 +3405,7 @@ shell cost +66% with tracing idle).
     new (+31%, matching translate_virtual_address's +33% absolute
     growth in the profile), dominated by user-context data banks
     (21.4M READ-U + 10.9M WRITE-U): tree's pointer-chasing heap
-    thrashes 128 slots per context where it had 512 shared. The
+    thrashes 128 slots per context where it had 256 shared. The
     win side of the same counter: syscall fills drop 4.2M -> 1.4M
     (-66%) with the flush-refill storms gone. regs interpreter
     +12.4%: the profile puts all the growth inside interpret_loop
@@ -3468,6 +3480,51 @@ shell cost +66% with tracing idle).
     rewinding the stale entry), correct but not sufficient --
     trace-insns did not move, pinning the skew to a different seam
     than either hardening covers.
+
+    AArch64 geometry amendment (2026-08-17). The address-range
+    requirement was clarified: each registered range starts aligned to its length,
+    and no other range overlaps the smallest power-of-two-sized and
+    aligned span containing it. Nothing requires PMAS to remain at
+    0x10000. The shadow-state range therefore grows to 0x20000, the
+    shadow TLB to 0x18000, and PMAS moves to 0x20000. This preserves 256
+    slots in every one of the four contexts rather than halving each
+    context to 128. Compile-time checks now enforce the public/internal
+    constants, TLB containment, shadow-state alignment, PMA alignment,
+    and separation from the shadow state's containing power-of-two span.
+
+    The amd64 result was remeasured on the AArch64 host as a controlled
+    four-way matrix at the original feature boundary: a1d73a48 (old
+    shared 256-slot TLB) against feefa36f with only the final 256-slot
+    geometry applied, stock and tailcall+lightning builds, fixed 256 Mi
+    mcycle boot plus 1 Gi measured, three interleaved repetitions.
+    Medians and context-vs-old deltas:
+
+      workload    stock-old stock-ctx    delta    jit-old  jit-ctx    delta
+      nop              0.740     0.726    -1.9%      0.054    0.040   -25.9%
+      regs             0.872     0.866    -0.7%      0.145    0.132    -9.0%
+      branch           1.651     1.640    -0.7%      1.312    1.339    +2.1%
+      tree             2.786     2.832    +1.7%      2.534    2.617    +3.3%
+      qsort            1.846     1.893    +2.5%      1.374    1.535   +11.7%
+      memcpy           1.545     1.544    -0.1%      0.335    0.325    -3.0%
+      zlib             1.918     1.916    -0.1%      1.129    1.153    +2.1%
+      hash             1.756     1.742    -0.8%      0.765    0.767    +0.3%
+      syscall          2.000     1.793   -10.3%      1.459    1.255   -14.0%
+      double           2.160     2.174    +0.6%      2.164    2.201    +1.7%
+      sieve            1.689     1.707    +1.1%      0.400    0.395    -1.2%
+      int64            1.979     2.038    +3.0%      0.760    0.772    +1.6%
+      matrixprod       1.649     1.660    +0.7%      1.644    1.650    +0.4%
+      geomean                              -0.44%                       -2.76%
+
+    Stock/JIT root hashes agree within each geometry for all thirteen
+    workloads. Old and context hashes differ by design because the
+    shadow-state format changed. The intended flush-storm wins transfer
+    to AArch64 (jit nop -25.9%, syscall -14.0%, regs -9.0%), although the
+    aggregate win is smaller than amd64's -2.0% stock / -6.0% jit. Most
+    importantly, restoring the old per-set capacity removes the capacity
+    explanation for amd64's tree +20.9% regression: tree is now only
+    +3.3% jit / +1.7% stock. Qsort's remaining +11.7% jit regression is
+    consistent with the separately diagnosed trace-formation lottery,
+    not TLB capacity.
 
 21. DONE, GATED: THE LOTTERY DISSOLVED -- BUDGET-GRACEFUL
     COMPILATION, AND THE BUDGET RAISE FALSIFIED. Item 20's filed
@@ -3553,8 +3610,8 @@ shell cost +66% with tracing idle).
     fallthrough successor IS, systematically, an uncollectable pc
     -- tripping a recording there (the filed fix) begins a trace
     that dies at entry 0. The root fix is staging: writes of
-    fflags, frm and fcsr (csrrw/csrrs/csrrc and immediates) now
-    stage as a whole-instruction helper, pre-bailing on FS off;
+    fflags, frm and fcsr (csrrw/csrrs/csrrc and immediates) are
+    collectable, with an FS guard and direct generated semantics;
     reads keep their inline staging. Soft-float fenv churn no
     longer ends recordings at all. Second, the successor-trip
     machinery itself (a per-trace transit countdown on the
@@ -3598,6 +3655,131 @@ shell cost +66% with tracing idle).
     5.91; geomean vs icount excluding nop 1.37x, with the
     matrixprod-truncation configuration demonstrating 1.30x is
     reachable once the per-head policy exists.
+
+    FP-CSR correction and AArch64 remeasurement (2026-08-18). The
+    first staging implementation routed FP-CSR writes through a C++
+    whole-instruction helper. Matrixprod then failed to complete in the
+    uncapped JIT used by the cross-emulator harness. Selectively disabling
+    only that helper restored both capped and uncapped completion; mapping
+    counters ruled out the suspected cross-page link-validation path. The
+    helper was therefore replaced rather than papered over with a trace
+    policy exception. Generated code now guards FS, materializes one fcsr
+    snapshot, derives the architectural old fflags/frm/fcsr value from that
+    snapshot, applies all six register and immediate CSRRW/CSRRS/CSRRC
+    forms, masks and merges the writable subfield, writes fcsr through the
+    trace shadow, and finally writes rd from the snapshot. Materialization
+    preserves read-before-write when rd aliases rs1. The general FP
+    arithmetic helpers are unchanged.
+
+    The final ctx256 stock and uncapped JIT builds were then rerun through
+    the full fixed-work AArch64 matrix: 256 Mi mcycles of untimed boot, 1 Gi
+    measured mcycles, three interleaved repetitions, medians below. Every
+    repetition reached the target mcycle and the stock/JIT root hashes were
+    identical for all thirteen workloads. The raw runs are committed as
+    bench-harness/results-aarch64-ctx256-fpfix.txt.
+
+      workload    stock     jit    stock/jit   jit delta
+      nop          0.730   0.041      17.805x      -94.4%
+      regs         0.862   0.132       6.530x      -84.7%
+      branch       1.641   1.293       1.269x      -21.2%
+      tree         2.915   2.682       1.087x       -8.0%
+      qsort        1.854   1.555       1.192x      -16.1%
+      memcpy       1.542   0.326       4.730x      -78.9%
+      zlib         1.916   1.140       1.681x      -40.5%
+      hash         1.742   0.767       2.271x      -56.0%
+      syscall      1.789   1.387       1.290x      -22.5%
+      double       2.176   2.201       0.989x       +1.1%
+      sieve        1.682   0.401       4.195x      -76.2%
+      int64        2.022   0.761       2.657x      -62.4%
+      matrixprod   1.672   1.656       1.010x       -1.0%
+      geomean                          2.297x      -56.5%
+
+    Matrixprod is therefore repaired but not accelerated: its 1.0% median
+    difference is effectively parity. Double is likewise neutral. The
+    aggregate 2.297x stock/JIT ratio comes from the integer and memory rows,
+    not from claiming an FP-heavy win.
+
+    Cross-emulator AArch64 board. The fixed-operation full-system comparison
+    was repaired without rerunning unaffected emulators: the final ctx256
+    stock and fixed JIT columns were rerun back-to-back for all workloads,
+    while the QEMU-system, QEMU-icount and RVVM columns retain their original
+    measurements with the same kernel, rootfs, static stress-ng binary and
+    calibrated operation counts. Each entry is the median of three runs after
+    subtracting that emulator's median no-work boot baseline, in seconds:
+
+      workload    cartesi-jit cartesi-stock qemu-system qemu-icount   rvvm
+      nop               0.512         5.698       0.470        0.629  0.534
+      regs              2.051        13.592       1.797        1.922  1.262
+      branch            0.758         0.970       3.059        3.079  1.466
+      tree              2.123         2.627       2.963        3.014  1.334
+      qsort             3.840         4.000       3.541        3.597  1.242
+      memcpy            2.530         9.655       4.951        5.533  1.438
+      zlib              4.948         8.259       4.035        4.224  2.119
+      hash              2.693         5.977       1.859        1.975  1.929
+      syscall           0.856         1.102       0.827        0.865  0.571
+      double            1.855         1.703       1.722        1.727  3.301
+      sieve             3.076        13.442       1.793        2.097  1.761
+      int64             2.942         4.024       2.242        2.283  0.347
+      matrixprod        3.685         3.734       2.340        2.391  0.863
+      geomean           2.054         4.239       2.078        2.220  1.190
+      time / jit        1.000         2.064       1.012        1.081  0.579
+
+    The completed board changes the earlier incomplete verdict cleanly.
+    Cartesi JIT is effectively tied with QEMU-system in aggregate (1.2% less
+    time) and uses 7.5% less time than QEMU-icount, despite very different
+    per-workload shapes. RVVM remains the fastest aggregate at 0.579x the
+    Cartesi JIT time. Cartesi JIT halves stock's aggregate time. Matrixprod
+    now completes all three repetitions and is again parity with stock; it
+    remains slower than both QEMU modes and RVVM at this operation count.
+
+    Cross-mapping call entries. Source inspection and instrumentation of
+    RVVM showed that its generated block tail performs a tagged JIT lookup
+    instead of returning to the main dispatch loop. Cartesi already had the
+    corresponding safety mechanism in `call_fn`: it validates the target
+    trace's recorded code-page mapping against the hot code TLB before
+    entering the trace body, installing the mapping or falling back when it
+    does not match. However, `tc_hook_site<true>` first required the target
+    trace to share the caller's current fetch mapping, so cross-page calls
+    could never reach that validator. The hook now bypasses that preliminary
+    equality test only for call entries. Loop and root entries retain the
+    original test, and `call_fn` remains the authority for cross-mapping
+    admission.
+
+    The narrower rule follows three rejected measurements. A fixed return
+    target missed all 7,587,936 probes on the shared int64 callee. A generated
+    dynamic return tail produced a deterministic wrong root hash and was
+    discarded. Sending every `jalr x0` and `c.jr` through the dynamic lookup
+    raised branch from 1.293 s to 4.450 s; restricting that experiment to
+    returns still measured about 4.64 s and did not improve int64 or
+    matrixprod. No return hook remains in the implementation.
+
+    The final change was rerun with the same fixed-work AArch64 protocol as
+    the preceding ctx256 JIT matrix. Each row below is the median of three
+    runs; all 39 runs reached 1,342,177,280 mcycles and reproduced the
+    established root hash. The raw runs are committed as
+    `bench-harness/results-aarch64-cross-call.txt`.
+
+      workload     before   cross-call   delta
+      nop            0.041        0.040    -2.4%
+      regs           0.132        0.131    -0.8%
+      branch         1.293        1.323    +2.3%
+      tree           2.682        2.692    +0.4%
+      qsort          1.555        1.212   -22.1%
+      memcpy         0.326        0.263   -19.3%
+      zlib           1.140        1.141    +0.1%
+      hash           0.767        0.715    -6.8%
+      syscall        1.387        0.439   -68.3%
+      double         2.201        1.934   -12.1%
+      sieve          0.401        0.385    -4.0%
+      int64          0.761        0.419   -44.9%
+      matrixprod     1.656        1.210   -26.9%
+
+    Instrumented int64 runs explain the principal win directly: JIT-covered
+    instructions rose from 359,922,720 (26.8%) to 1,117,481,194 (83.3%) of
+    the fixed instruction budget. Final matrixprod coverage was 433,349,686
+    instructions (32.3%). Thus the implemented result is a small admission
+    fix with measured coverage and runtime gains on call-heavy workloads,
+    while indirect return continuation linking remains open work.
 
 ## 8c. The register-budget series: filed ideas and the four-slot campaign
 
