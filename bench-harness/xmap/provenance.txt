@@ -55,21 +55,3 @@ index e8e4bfda..d47f0b7b 100644
              fn = trace->fn;
 d589dee48c3e3a75a459a711cebeee5a6429327e4cf165c95b2e7fd3c3fc4653  /tmp/claude-0/-home-user-machine-emulator/df7f391d-37d7-5139-b76a-fda20c029be9/scratchpad/campaign/builds/xmap-abl-no-crossmap/cartesi.so
 5cbc492b5453efd23490dcc882689dc3496bde5801c353a0363b0a4e19d93967  /tmp/claude-0/-home-user-machine-emulator/df7f391d-37d7-5139-b76a-fda20c029be9/scratchpad/campaign/builds/xmap-new-jit/cartesi.so
-
-=== GUEST INPUTS (added after review: the earlier provenance recorded only
-=== build artefacts and ops.json, not the inputs that define the guest work)
-cartesi linux.bin      9fb5aaa623f35c0ef2138c8dadf1b0a1e388e0f51758cb6a5477ec5cecd3a029
-  (symlink target: linux-6.5.13-ctsi-2-uio-test1-v0.21.0.bin)
-rootfs-bench.ext2      5c5e6930dc41b7fcf98296364d20f48b4eedd0827bfa4e1c838b930a26a1c7aa
-stock rootfs (source)  a240082c3b5988f40e6ab0677bf362a057a13431ac6f2c409568bcc87510b243
-stress-ng (host copy)  745e32e5981be359d9eff920943f6a511655edba6f3a7f87350f08a4ec7556a3
-stress-ng (in rootfs)  745e32e5981be359d9eff920943f6a511655edba6f3a7f87350f08a4ec7556a3
-stress-ng version      0.17.06
-RVVM boot image        c2370b05b683d511851279c5c3f637873a334898597db283c11a2da413bffa13
-ops.json               fe9b0b79bf9c86b3a4b01d14555c3794fa0681190da847615d7f2cd55149f244
-
-=== AArch64 board references supplied by the maintainer, for comparison
-AArch64 linux.bin      551ed4dae2b82ed59b4055f18d525a77f5ee35605acbf1238ff83e0cf9bfc3f1
-AArch64 rootfs         3f6ad0dba2a74d62792794b411dd0791fae194fdf639512b7c9feddb1829eee9
-AArch64 stress-ng      26caa5259058a82388e537d18d6ac8afee8e0bbb56ddcfd2a13e79e05e508608
-=> none of the three match this board's inputs.
