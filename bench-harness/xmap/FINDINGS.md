@@ -71,40 +71,56 @@ entered**; without cross-mapping it runs 31 M times. Summing every head's
 difference overshoots the 327 M net gap (coverage partly redistributes to other
 traces), so 327 M — the stage-3 figure — remains the net measure.
 
-## Guest-input provenance, and a limit it places on the cross-architecture premise
+## Guest-input provenance, and what the hash differences do and do not mean
 
 The first provenance record covered build artefacts and `ops.json` but not the
-inputs that actually define the guest work. Recorded now, with the AArch64
-board's references for comparison:
+inputs that define the guest work. Recorded now, with the AArch64 board's
+references supplied by the maintainer:
 
-| guest input | AArch64 board | this AMD64 board | match |
+| guest input | AArch64 board | this AMD64 board | `dependencies.lock` |
 | --- | --- | --- | --- |
-| `linux.bin` | `551ed4da…` | `9fb5aaa6…` | no |
-| rootfs | `3f6ad0db…` | `5c5e6930…` (bench), `a240082c…` (stock source) | no |
-| `stress-ng` | `26caa525…` | `745e32e5…` | no |
+| cartesi `linux.bin` | `551ed4da…` | `9fb5aaa6…` | `9fb5aaa6…` (exact match) |
+| stock rootfs | — | `a240082c…` | `a240082c…` (exact match) |
+| bench rootfs | `3f6ad0db…` | `5c5e6930…` | n/a (locally constructed) |
+| `stress-ng` | `26caa525…` | `745e32e5…` | n/a (locally built) |
 
-Full hashes are in `provenance.txt`. The host copy of `stress-ng` and the copy
-extracted back out of the booted rootfs agree (`745e32e5…`), so the binary that
-ran is the binary recorded; its version is 0.17.06.
+This board's cartesi `linux.bin` and stock rootfs are exactly the artefacts
+`make -C tests images` fetches, matching `MACHINE_LINUX_IMAGE_SHA256` and
+`MACHINE_GUEST_TOOLS_ROOTFS_SHA256`. The committed RVVM OpenSBI+Linux image
+(`c2370b05…`) is used only by the RVVM column: `compete.lua` reads
+`images_dir/linux.bin`, `rvvm.py` reads its own. The `stress-ng` copy extracted
+back out of the booted rootfs equals the host copy, so the binary that ran is
+the binary recorded; version 0.17.06.
 
-**What this does not affect.** Every comparison in this investigation is
-within-board: the same `linux.bin`, rootfs and `stress-ng` were used for both
-builds in stage 2, all four builds in the ablations, and every emulator column.
-Identical final `mcycle` on each paired sample is direct evidence that the
-compared runs executed identical guest work. Stages 2–4 stand as measured.
+Reading the three differences correctly, since not all of them mean the same
+thing:
 
-**What it does affect.** Cross-board statements do not follow. The premise this
-investigation was handed — "on AArch64, `sieve` does not show this regression"
-— compares two boards whose kernel, rootfs and benchmark binary all differ.
-Under the fixed-operation protocol a different `stress-ng` binary means a
-different instruction stream for the same nominal bogo-op count, so the AArch64
-non-regression cannot be attributed to the architecture without first
-establishing that the guest work matches. The cheap discriminating check is to
-compare the final `mcycle` for `sieve` at the same `ops.json` count on both
-boards: equal mcycles would make it an architecture difference, unequal mcycles
-would make it a workload difference and would mean the two boards are not
-running the same experiment. That check has not been run here, because this
-container has only the AMD64 inputs.
+- The **bench rootfs** and **`stress-ng`** hashes are expected to differ
+  between boards. Both are constructed locally — the rootfs by `e2cp` injection
+  into a copy (not byte-reproducible: timestamps and inode allocation), and
+  `stress-ng` by compiling musl-static on the local host. A hash mismatch here
+  is not by itself evidence of different guest software.
+- The **cartesi `linux.bin`** difference is meaningful, because that artefact is
+  a pinned download that is byte-identical by construction. This board's copy
+  matches the lock; `551ed4da…` therefore is not the lock-pinned cartesi image
+  at this commit. Whether that is a real discrepancy depends on which artefact
+  `551ed4da…` is: the AArch64 board's cartesi image (in which case the two
+  boards ran different kernels) or its RVVM boot image (in which case there is
+  no discrepancy, only two unlike artefacts being compared).
+
+**What none of this affects.** Every comparison in this investigation is
+within-board, on one set of inputs, with identical final `mcycle` on each paired
+sample as direct evidence that the compared runs executed identical guest work.
+Stages 2-4 stand as measured.
+
+**What remains bounded.** The handed premise -- "on AArch64 `sieve` does not
+show this regression" -- still requires that both boards run the same guest
+work, and that is not yet established. The decisive check is insensitive to all
+of the above construction noise: compare the final `mcycle` for `sieve` at the
+same `ops.json` count on both boards. Equal mcycles make it an architecture
+difference; unequal mcycles make it a workload difference. This board retires
+8,622,871,657 for `sieve`. That check has not been run, because only the AMD64
+inputs exist in this container.
 
 ## What is established, and what is not
 
