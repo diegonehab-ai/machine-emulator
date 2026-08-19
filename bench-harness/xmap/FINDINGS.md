@@ -71,6 +71,41 @@ entered**; without cross-mapping it runs 31 M times. Summing every head's
 difference overshoots the 327 M net gap (coverage partly redistributes to other
 traces), so 327 M — the stage-3 figure — remains the net measure.
 
+## Guest-input provenance, and a limit it places on the cross-architecture premise
+
+The first provenance record covered build artefacts and `ops.json` but not the
+inputs that actually define the guest work. Recorded now, with the AArch64
+board's references for comparison:
+
+| guest input | AArch64 board | this AMD64 board | match |
+| --- | --- | --- | --- |
+| `linux.bin` | `551ed4da…` | `9fb5aaa6…` | no |
+| rootfs | `3f6ad0db…` | `5c5e6930…` (bench), `a240082c…` (stock source) | no |
+| `stress-ng` | `26caa525…` | `745e32e5…` | no |
+
+Full hashes are in `provenance.txt`. The host copy of `stress-ng` and the copy
+extracted back out of the booted rootfs agree (`745e32e5…`), so the binary that
+ran is the binary recorded; its version is 0.17.06.
+
+**What this does not affect.** Every comparison in this investigation is
+within-board: the same `linux.bin`, rootfs and `stress-ng` were used for both
+builds in stage 2, all four builds in the ablations, and every emulator column.
+Identical final `mcycle` on each paired sample is direct evidence that the
+compared runs executed identical guest work. Stages 2–4 stand as measured.
+
+**What it does affect.** Cross-board statements do not follow. The premise this
+investigation was handed — "on AArch64, `sieve` does not show this regression"
+— compares two boards whose kernel, rootfs and benchmark binary all differ.
+Under the fixed-operation protocol a different `stress-ng` binary means a
+different instruction stream for the same nominal bogo-op count, so the AArch64
+non-regression cannot be attributed to the architecture without first
+establishing that the guest work matches. The cheap discriminating check is to
+compare the final `mcycle` for `sieve` at the same `ops.json` count on both
+boards: equal mcycles would make it an architecture difference, unequal mcycles
+would make it a workload difference and would mean the two boards are not
+running the same experiment. That check has not been run here, because this
+container has only the AMD64 inputs.
+
 ## What is established, and what is not
 
 Established: the sieve regression is an execution-topology change, not a
