@@ -1966,3 +1966,61 @@ let the single wedged cell block the remaining 183.
 Not measured: whether the -6.1% memcpy and -3.4% int64 the AArch64 ADDI
 entry reports transfer to this architecture. That needs the same-binary
 `CP_IMM_DISABLE=1` control, which is the next step.
+
+## Done: the aligned amd64 trace ABI, measured (2026-08-23)
+
+`8d9f970b` reorders the x86-64 stencil roster so the interpreter's five live
+arguments occupy positions 1-5 -- `{sa, r0, pc, cd, fetch, r1..., tcc}` --
+with the cache slots and context in a stack half established once per chain.
+Trace entry is a plain musttail branch again, and the `cp_enter_call` path
+added with the earlier x86-64 entry contract is gone entirely (0 references
+in interpret-tc.cpp, interpret-cp.inc, interpret-cp-continue.inc). That is
+the better fix: the call-based entry was one of the two structural causes
+proposed for the amd64 tax, and this removes it rather than paying it.
+
+Same-binary pairs are not available across an ABI change, so this is an
+interleaved two-build A/B, bench.lua fixed-work, 3 reps, medians. Both arms
+retire identical mcycles and root hashes on all 13 workloads.
+
+    workload      old ABI   new ABI    ratio
+    nop             0.06      0.06     1.000
+    regs            0.84      0.82     0.977
+    branch          4.64      4.45     0.959
+    tree            6.49      5.73     0.883
+    qsort           2.08      2.06     0.990
+    memcpy          1.00      0.94     0.946
+    zlib            2.04      2.03     0.997
+    hash            1.76      1.65     0.935
+    syscall         1.35      1.35     1.004
+    double          5.93      5.37     0.906
+    sieve           1.02      1.02     0.997
+    int64           1.03      1.04     1.005
+    matrixprod      1.63      1.57     0.966
+    geomean         1.47      1.42     0.966
+
+A 3.4% geomean gain, concentrated in the chain-heavy rows (tree -11.7%,
+double -9.4%), with nothing regressing beyond noise. The rows that gain are
+the ones crossing the entry boundary most often, which is consistent with
+removing per-entry call overhead; that mechanism is inferred from the row
+pattern, not profiled.
+
+Gates: `cp-stencils-test` and `cp-machine-test` pass, 15092 stencils extract,
+and all 13 workloads match a same-tip stock build on mcycle and root hash.
+
+### A near-miss worth recording
+
+Two single-rep gate runs, taken before and after the merge, suggested cp had
+improved 20-30% on several rows. It had not. The *stock* column moved almost
+as far between the same two runs (nop 1.54 -> 1.32, regs 2.88 -> 1.92), which
+is machine state, not code. Only the interleaved same-run A/B above is
+trustworthy, and it puts the gain at 3.4%. Cross-run single-rep comparisons
+on this host are worthless at this effect size.
+
+### What this leaves
+
+cp/light on the amd64 compete board was 1.36 before this change. A 3.4% cp
+gain puts it near 1.31 by arithmetic; that is a projection, not a
+measurement, and the board rerun is what would settle it. Of the two
+structural causes proposed for the amd64 tax, the call-based entry is now
+removed, leaving `CP_NSLOTS=7` against AArch64's 16 as the sole remaining
+candidate.
