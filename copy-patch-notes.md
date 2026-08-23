@@ -2024,3 +2024,66 @@ measurement, and the board rerun is what would settle it. Of the two
 structural causes proposed for the amd64 tax, the call-based entry is now
 removed, leaving `CP_NSLOTS=7` against AArch64's 16 as the sole remaining
 candidate.
+
+## Done: five-emulator board at the merged tip, and why it cannot price the ABI (2026-08-23)
+
+Full board at the aligned-ABI tip, compete protocol, boot-subtracted,
+3 interleaved reps, 234/234 cells, no failures. Columns: stock `070f5abf`,
+lightning `eef716ad`, cp `b7f95203`, all built from this tip and mutually
+hash-gated; RVVM at the pinned `33ea63aa`. Raw data in
+`results-matrix5-amd64-abi.json`.
+
+    workload    stock  light     cp  qemu-sys qemu-icnt  rvvm  cp/light
+    nop         10.54   0.68   1.03    1.35     1.55     0.89     1.52
+    regs        29.17   4.11  12.48    2.75     2.87     2.49     3.04
+    branch       1.55   1.49   2.42    5.07     4.62     2.50     1.62
+    tree         5.51   4.60   5.16    5.50     5.54     3.12     1.12
+    qsort        7.12   4.71   5.20    4.19     4.90     2.48     1.11
+    memcpy      16.99   6.01   8.28    5.40     8.83     3.00     1.38
+    zlib        12.17   8.45  10.01    5.86     7.85     4.03     1.18
+    hash         8.80   4.58   5.76    3.24     4.02     3.46     1.26
+    syscall      2.04   0.96   1.48    1.51     1.35     1.29     1.55
+    double       4.59   3.37   4.74    2.58     2.34     5.54     1.40
+    sieve       20.71   4.61   8.47    3.44     6.22     3.50     1.84
+    int64        5.50   3.01   2.48    2.61     2.35     0.81     0.83
+    matrixprod   6.06   2.76   4.32    2.93     3.35     1.73     1.56
+    geomean      7.46   3.11   4.43    3.25     3.70     2.34     1.42
+
+Lightning leads cp 1.42x and leads qemu-system (3.11 vs 3.25); cp wins one
+row, int64 at 0.83; RVVM still leads everything at 2.34.
+
+### This board cannot be differenced against the pre-ABI one
+
+Every column moved between the two boards, including three that contain no
+Cartesi code at all:
+
+    qemu-system  4.51s -> 3.47s  (0.768)
+    qemu-icount  4.51s -> 4.02s  (0.892)
+    rvvm         2.89s -> 2.46s  (0.850)
+
+A cp ABI change cannot speed up RVVM. The host was simply in a different
+state between the runs, so cross-board absolute times are not comparable and
+no code change can be priced from them. The only cross-board quantity worth
+reading is the within-run ratio: cp/light on the 12 common rows went 1.362
+(pre-ABI) to 1.414 (merged tip).
+
+That does not overturn the ABI measurement, and it is not evidence the ABI
+hurt. The interleaved two-build A/B in the previous entry -- same run, same
+host state, 3 reps, hash-gated -- put the ABI at a 3.4% cp gain, and it
+remains the only valid measurement of that change. The ratio moving the other
+way across two differently-loaded runs is within what this host's run-to-run
+variation can produce, as the 0.768-to-0.892 spread on the untouched columns
+shows.
+
+Explicitly retracted: the projection in the previous entry that a 3.4% cp
+gain would put cp/light "near 1.31". It was labelled arithmetic rather than
+measurement, and the measured value is 1.414. The projection was wrong
+because it assumed the two boards were comparable, which they are not.
+
+### Correction: the qemu-system syscall wedge is intermittent, not deterministic
+
+The earlier entry called that hang deterministic on the strength of it
+reproducing at the same cell in two consecutive runs. This board completed
+all three syscall reps normally (qemu-system 1.51s). Two reproductions were
+not enough to call it deterministic; it is intermittent, and the per-cell
+timeout is what makes the board robust to it either way.
