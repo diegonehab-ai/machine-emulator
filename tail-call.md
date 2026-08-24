@@ -4457,3 +4457,76 @@ they actually address, not against the full wall-clock deficit.
 Also unmeasured: cachegrind was run on regs only, the worst row. The
 mechanism may weight differently on rows nearer parity such as tree or
 double.
+
+## 26. Correction to items 24 and 25: the deficit is 2.6%, not 9.8%
+
+Item 24's headline is wrong. Re-measured with the same builds, same driver
+and same workloads, but five repetitions and the arm order alternating per
+repetition:
+
+    workload      plain  tailcall   ratio   item 24
+    nop            1.19      1.14   0.956     0.795
+    hash           2.24      2.19   0.975     1.155
+    zlib           2.53      2.50   0.988     1.130
+    tree           4.85      4.84   0.997     1.000
+    int64          2.01      2.04   1.014     1.109
+    sieve          2.08      2.13   1.022     1.150
+    syscall        2.21      2.27   1.027     1.114
+    memcpy         2.02      2.09   1.033     1.140
+    regs           1.55      1.62   1.043     1.395
+    branch         2.09      2.19   1.044     1.180
+    matrixprod     2.28      2.41   1.056     1.096
+    double         4.42      4.79   1.082     1.020
+    qsort          2.59      2.89   1.117     1.085
+    geomean        2.31      2.37   1.026     1.098
+
+The tail-call interpreter is 2.6% slower overall, not 9.8%, and it wins three
+rows outright -- nop, hash, zlib -- and ties tree. Item 24 reported regs at
+1.395 where it measures 1.043.
+
+### What was wrong with item 24
+
+Two defects, both mine:
+
+- **No order randomisation.** The loop ran `plain` then `abi-stock` inside
+  every repetition, so any systematic within-pair drift landed entirely on
+  the tail-call arm. This run alternates the order per repetition.
+- **Three repetitions, and no spread reported.** Item 24 printed only
+  medians. Per-repetition values here overlap heavily on most rows (regs
+  plain 1.52-1.58 against tail-call 1.57-1.71), which is exactly the
+  signature that three medians hide.
+
+The absolute times also fell for both arms between the runs (regs plain 2.10
+to 1.55), the same host-state drift that moved whole matrix boards by 15-25%
+earlier. That explains the levels, not the ratio; only the method does.
+
+### What survives from item 25
+
+The cachegrind counts are deterministic and hardware-independent, so they
+stand unchanged: on regs, +15.9% instructions (39.1 against 33.7 host
+instructions per guest instruction) and -21.4% indirect mispredicts, on an
+identical indirect branch count. So does the disassembly: 138 of 251
+handlers allocate a stack frame against 1 for the whole plain loop, and each
+handler reloads the jump-table base that the plain loop keeps in %r11.
+
+What changes is the conclusion drawn from them. Item 25 framed the
+instruction count as explaining a 9.8% deficit and noted that it did not
+reach regs' apparent 39.5%. With the real figure at 2.6%, the numbers fit
+together properly: the tail-call interpreter executes 16% more instructions
+and still lands within 3% of the switch loop, because the 21% better
+indirect prediction pays for most of them. That is a considerably better
+account of threading on this host than item 25 gave.
+
+### Revised recommendations
+
+Unchanged in substance, stronger in prospect. Removing the per-handler stack
+frame (~2 instructions per dispatch) and pinning the jump-table base (~1)
+addresses about 3 of the 5.4 extra instructions, taking the instruction gap
+from 15.9% to roughly 7%. Against a 2.6% wall-clock deficit with a 21%
+prediction advantage already banked, that is the first configuration in this
+campaign with a concrete reason to expect the tail-call interpreter to come
+out ahead of the plain one rather than merely level.
+
+That last sentence is a projection from the instruction accounting, not a
+measurement. It needs the two changes built and run under this protocol --
+five repetitions, alternating order, per-repetition spreads reported.
