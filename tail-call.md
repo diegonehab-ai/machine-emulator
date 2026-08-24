@@ -4369,3 +4369,91 @@ instruction counts to settle, and this entry does not claim it.
 Also unmeasured: the same comparison under Clang, where `musttail` is
 enforced and the pinned-register shape is available, and on AArch64, where
 `TC_GLOBAL_REGS=1` pins the roster by default. Both could reverse the sign.
+
+## 25. Why the tail-call interpreter loses on amd64: instruction count, not prediction
+
+Item 24 measured the deficit (9.8% geomean, worst on regs at 1.395). This
+localises it. No hardware PMU exists in this environment -- `cycles`,
+`instructions`, `branches`, `branch-misses` all report `<not supported>` --
+so the counts below come from cachegrind's simulation with `--branch-sim`,
+and the time attribution from perf sampling, which falls back to cpu-clock.
+
+Both builds, `regs`, identical guest work (mcycle 335,544,320):
+
+    metric                plain          tail-call        delta
+    instructions     11,312,176,698   13,109,306,893     +15.9%
+    indirect branches   337,044,318      337,044,308     identical
+    indirect mispred    103,431,326       81,347,516     -21.4%
+    indirect mispred %        30.7%            24.1%
+    I1 misses                20,009          352,012     negligible (0.003%)
+    D refs            2,711,477,762    2,862,334,901      +5.6%
+
+Per guest instruction: plain 33.7 host instructions, tail-call 39.1, so
+**+5.4 instructions per dispatch**.
+
+### What this rules out
+
+- **Branch prediction is not the problem; it is the one thing threading is
+  winning.** Indirect mispredicts fall 21.4% and the rate drops from 30.7%
+  to 24.1%. The classic threaded-interpreter argument holds here. It is
+  simply outweighed.
+- **The dispatch count is unchanged.** 337,044,318 versus 337,044,308
+  indirect branches -- the same dispatches, relocated, not multiplied.
+- **I-cache is not the problem.** I1 misses are 0.003% of instructions in
+  the worse of the two; LLi miss rate is 0.00% in both.
+- **CET landing pads are not a differentiator.** Both binaries carry exactly
+  153 `endbr64` in the interpreter body; the plain loop's switch targets need
+  them just as the handlers do.
+
+### Where the extra instructions come from
+
+Disassembling `tc_handler_C_MV` (53.9% of regs' samples; two instructions of
+real work, read a guest register and write another) against the plain loop's
+C_MV case and its shared dispatch tail:
+
+    per dispatch                       plain          tail-call
+    stack frame              none (1 for the loop)  sub rsp,0x48 + add rsp,0x48
+    jump-table base          held in %r11           lea r9,[rip+tc_jumptable]
+    dispatch tail            one shared block       inlined into every handler
+
+Statically, 138 of 251 handlers allocate a frame, against 1 for the entire
+plain loop; the plain loop has 6 indirect dispatch sites against 197.
+
+The frame and the table reload are 3 of the 5.4 extra instructions. The
+remaining ~2.4 is argument shuffling across the handler boundary and
+optimisations the switch loop gets for free by keeping state live in
+registers across guest instructions.
+
+### Recommendations, in expected-value order
+
+1. **Get the stack frame off the hot path.** No hot handler needs one;
+   `sub rsp,0x48` is there because the cold paths (the page-crossing fetch,
+   which really does call) force a frame that GCC allocates in the prologue
+   instead of shrink-wrapping. Outline every cold path behind a
+   `[[gnu::noinline, gnu::cold]]` helper so the hot path is frame-free.
+   Worth ~2 of 39 instructions per dispatch, about 5%.
+2. **Keep the jump-table base in a register.** The plain loop holds it in
+   %r11 across iterations for free; each handler reloads it with a
+   RIP-relative `lea` because the table is not reachable as a
+   register-indexed absolute under `-fPIC`. Add it to the pinned roster, or
+   thread it as a chain argument. Worth ~1 of 39, about 2.5%.
+3. Together those two are ~3 of the 5.4 extra instructions -- roughly 55% of
+   the instruction gap. Combined with the 21% mispredict advantage the
+   threading already has, that is the plausible route to parity, and the
+   first configuration in this campaign with a reason to expect it.
+4. **Do not spend effort on branch prediction or I-cache layout.** Both are
+   measured, and both already favour the tail-call build or are irrelevant.
+
+### Honest residual
+
+Instruction count does not fully explain this row. On regs the native A/B
+puts tail-call 39.5% slower while cachegrind shows only 15.9% more
+instructions and better prediction. Something outside these counters costs
+as well -- port pressure or dependency chains through the argument roster
+are candidates cachegrind does not model, and this environment has no PMU to
+settle it. The recommendations above are sized against the instruction gap
+they actually address, not against the full wall-clock deficit.
+
+Also unmeasured: cachegrind was run on regs only, the worst row. The
+mechanism may weight differently on rows nearer parity such as tree or
+double.
