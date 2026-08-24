@@ -4298,3 +4298,74 @@ x86-64 register contract is at its floor: with four guest registers,
 one more consumer of the register file would have to come out of the
 spilled-guest fallback rather than out of the budget (the args contract
 of 8b item 10 relaxes this to five guests with none reserved).
+
+## 24. The tail-call interpreter alone is slower than the plain interpreter on amd64
+
+Measured because every board in this campaign calls its baseline column
+"stock", and that column has always been built `tailcall=yes` with no
+backend -- the tail-call interpreter, not the plain one. The plain
+interpreter had never been benchmarked here, so tail-call threading's own
+contribution was unmeasured.
+
+Interleaved same-run A/B, bench.lua fixed work (boot to 256Mi untimed then
+exactly 1<<30 mcycles timed), 3 reps, medians. Builds: plain `42018059`
+(`make cartesi.so`, no TAILCALL_INTERPRET in the log) against `070f5abf`
+(`tailcall=yes`). Every workload retires one mcycle and root hash across
+both builds and all reps.
+
+    workload      plain  tailcall   ratio
+    nop            1.98      1.57    0.795
+    regs           2.10      2.93    1.395
+    branch         2.77      3.27    1.180
+    tree           7.92      7.92    1.000
+    qsort          3.67      3.98    1.085
+    memcpy         2.84      3.23    1.140
+    zlib           3.24      3.67    1.130
+    hash           3.04      3.50    1.155
+    syscall        3.49      3.89    1.114
+    double         7.52      7.67    1.020
+    sieve          2.82      3.24    1.150
+    int64          3.65      4.04    1.109
+    matrixprod     3.70      4.05    1.096
+    geomean        3.44      3.77    1.098
+
+The tail-call interpreter is 9.8% slower overall. It wins exactly one row,
+nop, by 20%; that is the pure-dispatch workload, which is where threading
+should win. Everything else pays.
+
+Verified rather than assumed, because the result contradicts the campaign's
+working premise:
+
+- The builds run different interpreters. perf on sieve: plain spends 82.4%
+  in `interpret_loop<state_access>`, the monolithic switch; the tail-call
+  build spends its time across `tc_handler_*` symbols.
+- The threading is real. Disassembling the tail-call library, handler bodies
+  contain 211 indirect `jmp` and **zero** indirect `call`. GCC's sibling-call
+  optimisation emits genuine tail calls here even though `TC_MUSTTAIL` is
+  empty in this configuration -- it is only defined for GCC under
+  `TC_LIGHTNING && !TC_GLOBAL_REGS`, which a no-backend build does not
+  satisfy.
+- Per-rep spreads are tight (sieve 3.19/3.24/3.28), and both arms run in the
+  same process sequence, so host state cannot separate them.
+
+### What this changes about the boards
+
+Every "Nx faster than stock" figure in this notebook and in
+copy-patch-notes.md is relative to the tail-call interpreter. Against the
+plain interpreter the backends' advantage is about 9% smaller. The boards
+are not wrong, but "stock" in them does not mean "the emulator before this
+work"; it means "the substrate the backends ride on, with the backend
+switched off".
+
+### Not established
+
+Why threading loses outside nop. The plausible reading is that the switch
+loop keeps interpreter state in registers across instruction boundaries
+while the threaded form re-materialises it through the argument roster at
+every dispatch, and that on x86-64 with `TC_GLOBAL_REGS=0` nothing is
+pinned to offset that. That is a hypothesis; it needs the per-dispatch
+instruction counts to settle, and this entry does not claim it.
+
+Also unmeasured: the same comparison under Clang, where `musttail` is
+enforced and the pinned-register shape is available, and on AArch64, where
+`TC_GLOBAL_REGS=1` pins the roster by default. Both could reverse the sign.
